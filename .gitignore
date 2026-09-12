@@ -3,7 +3,6 @@ __pycache__/
 *.pyc
 .env
 .cache/
-baseline.json
 .paper_run_start
 run.log
 cutloss.log
