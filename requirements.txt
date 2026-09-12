@@ -1,0 +1,5 @@
+-r vendor/kronos/requirements.txt
+numpy<2  # pandas==2.2.2 (pinned by vendor/kronos) segfaults on numpy 2.x, see README notes
+yfinance
+alpaca-py
+python-dotenv
