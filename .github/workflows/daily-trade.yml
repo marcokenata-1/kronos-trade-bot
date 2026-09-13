@@ -15,6 +15,7 @@ env:
 jobs:
   trade:
     runs-on: ubuntu-latest
+    environment: Paper API Key
     steps:
       - uses: actions/checkout@v4
         with:
