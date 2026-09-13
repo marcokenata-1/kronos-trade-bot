@@ -90,8 +90,11 @@ def check_stop_losses():
     for position in client.get_all_positions():
         plpc = float(position.unrealized_plpc)
         if plpc <= -STOP_LOSS_PCT:
-            client.close_position(position.symbol)
-            print(f"stop-loss: sold {position.symbol} at {plpc:+.2%}")
+            try:
+                client.close_position(position.symbol)
+                print(f"stop-loss: sold {position.symbol} at {plpc:+.2%}")
+            except Exception as e:
+                print(f"stop-loss: failed to close {position.symbol} ({e})")
 
 
 def watch_stop_losses(interval=60):
@@ -116,8 +119,11 @@ def check_signal_exits():
             print(f"{position.symbol}: could not re-check signal ({e})")
             continue
         if direction == "SELL":
-            get_trading_client().close_position(position.symbol)
-            print(f"signal exit: sold {position.symbol} (forecast {change:+.2%})")
+            try:
+                get_trading_client().close_position(position.symbol)
+                print(f"signal exit: sold {position.symbol} (forecast {change:+.2%})")
+            except Exception as e:
+                print(f"signal exit: failed to close {position.symbol} ({e})")
 
 
 def check_drawdown_halt():
@@ -243,7 +249,7 @@ def sp500_tickers():
     # ponytail: routed through requests (bundles certifi CA certs) instead of pd.read_html's
     # urllib, which fails on this machine's python.org build with no system CA bundle wired up
     headers = {"User-Agent": "kronos-test-bot/1.0 (personal project)"}
-    html = requests.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies", headers=headers).text
+    html = requests.get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies", headers=headers, timeout=10).text
     table = pd.read_html(io.StringIO(html), flavor="lxml")[0]
     return table["Symbol"].str.replace(".", "-", regex=False).tolist()
 
