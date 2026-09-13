@@ -5,6 +5,7 @@ import json
 import time
 import argparse
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 import requests
@@ -185,8 +186,9 @@ def fetch_ohlcv(ticker, period="2y", interval="1d"):
     return df[["timestamp", "open", "high", "low", "close", "volume"]]
 
 
-def signal(ticker):
-    df = fetch_ohlcv(ticker)
+def signal(ticker, df=None):
+    if df is None:
+        df = fetch_ohlcv(ticker)
     x_df = df.iloc[-LOOKBACK:][["open", "high", "low", "close", "volume"]]
     x_timestamp = df.iloc[-LOOKBACK:]["timestamp"]
     freq = pd.infer_freq(x_timestamp) or "B"
@@ -246,11 +248,25 @@ def sp500_tickers():
     return table["Symbol"].str.replace(".", "-", regex=False).tolist()
 
 
-def scan(tickers):
+def _fetch_or_error(ticker):
+    try:
+        return fetch_ohlcv(ticker)
+    except Exception as e:
+        return e
+
+
+def scan(tickers, fetch_workers=10):
+    # ponytail: fixed worker count, not adaptive to Yahoo Finance rate-limiting —
+    # lower it if runs start hitting 429s under this concurrency
+    with ThreadPoolExecutor(max_workers=fetch_workers) as pool:
+        dfs = list(pool.map(_fetch_or_error, tickers))
+
     results = []
-    for i, ticker in enumerate(tickers, 1):
+    for i, (ticker, df) in enumerate(zip(tickers, dfs), 1):
         try:
-            direction, change = signal(ticker)
+            if isinstance(df, Exception):
+                raise df
+            direction, change = signal(ticker, df=df)
             results.append((ticker, direction, change))
         except Exception as e:
             print(f"[{i}/{len(tickers)}] {ticker}: skipped ({e})")
