@@ -22,7 +22,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.12'  # pandas==2.2.2 (pinned by vendor/kronos) ships no cp313 wheel
           cache: 'pip'
           cache-dependency-path: requirements.txt
 
