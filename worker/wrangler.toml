@@ -1,0 +1,6 @@
+name = "helm-telegram"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+REPO = "marcokenata-1/kronos-trade-bot"

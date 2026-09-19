@@ -8,3 +8,5 @@ run.log
 cutloss.log
 .daily_events.log
 dashboard.log
+.wrangler/
+node_modules/

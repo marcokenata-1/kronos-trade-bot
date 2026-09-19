@@ -47,6 +47,7 @@ in your order history is a regular `auto` buy, funded from cash, not from profit
 | `python bot.py auto [--crypto] [--notional 2] [--top-n 5] [--budget N] [--limit N]` | The daily run above |
 | `python bot.py rebalance [TICKER...] [--split 4]` | Profit reinvestment above |
 | `python bot.py stoploss` | One stop-loss pass, then a Telegram message if anything was sold (what the 30-minute workflow runs) |
+| `python bot.py status` | Send the phone-sized status to Telegram now (what `/status` triggers) |
 | `python bot.py watch [--interval 60]` | Loop forever checking stop-losses, for running on your own machine |
 | `python bot.py report` | Send the Telegram summary |
 | `python bot.py web [--port 8000]` | Start the local dashboard |
@@ -126,6 +127,45 @@ Each step writes what it did and why to `.daily_events.log` as it goes; `report`
 and clears it. "Yesterday" is Alpaca's `last_equity` (previous trading-day close). To get your chat ID,
 message your bot, then open `https://api.telegram.org/bot<TOKEN>/getUpdates` and look for `chat.id`.
 If the variables aren't set, `report` just prints the message.
+
+### Asking the bot for a status from your phone
+
+Send **/status** to your bot in Telegram. It answers at once ("Fetching your status, about a minute"), then sends a
+phone-sized version of the dashboard:
+
+```
+Helm status
+Equity $100,044.48 (-$6.01 since last close)
+Ahead of buy-and-hold by $35.40 since Aug 13 (bot +$45.83, hold +$10.44)
+Invested $370.06 (0.4%), cash $99,564.42
+
+Top positions
+SKY/USD $142.93 +12.42%
+UNI/USD $81.12 +38.19%
+APP $22.92 -4.01%
+
+Queued: 21 buys, $130.00
+```
+
+How it works: Telegram sends your message to a small **Cloudflare Worker** (`worker/worker.js`, free plan). The Worker
+replies instantly and starts the **Telegram status** GitHub workflow, which builds the message and sends it. Your
+Alpaca keys stay in GitHub; the Worker only holds a token that can start that one workflow. Only your own chat
+(`TELEGRAM_CHAT_ID`) is answered, and only Telegram can call the Worker, because it checks a secret header. Anyone
+else gets nothing.
+
+**One-time setup** (after these files are on GitHub, since the workflow has to exist):
+
+1. Create a GitHub **fine-grained token**: Settings > Developer settings > Fine-grained tokens. Repository access:
+   only this repo. Permission: **Actions, read and write**.
+2. `npx wrangler login` (opens your browser to sign in to Cloudflare).
+3. `./worker/setup.sh`. It deploys the Worker, stores its secrets (asking you for the GitHub token, hidden), and points
+   your bot's webhook at it. Nothing secret is printed or saved to a file.
+
+To undo it: `cd worker && npx wrangler delete`, then
+`.venv/bin/python -c "import bot; print(bot._telegram('deleteWebhook'))"`.
+
+Telegram won't allow polling while a webhook is set, so this replaces any "check every few minutes" approach. You can
+also run **Telegram status** by hand from the Actions tab to get the message without sending a command.
 
 ## Local dashboard
 

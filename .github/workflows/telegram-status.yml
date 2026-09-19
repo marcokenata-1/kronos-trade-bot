@@ -1,0 +1,29 @@
+name: Telegram status
+
+on:
+  workflow_dispatch: {}  # started by the Cloudflare Worker when you send /status, or by hand from the Actions tab
+
+env:
+  ALPACA_PAPER_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
+  ALPACA_PAPER_SECRET_KEY: ${{ secrets.ALPACA_PAPER_SECRET_KEY }}
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+concurrency:
+  group: telegram-status
+  cancel-in-progress: false
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    environment: Paper API Key
+    steps:
+      - uses: actions/checkout@v4  # no submodules: this job never loads Kronos
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install alpaca-py python-dotenv yfinance requests
+
+      - run: python bot.py status

@@ -463,19 +463,28 @@ def _benchmark_lines(bench):
     return [*lines, ""]
 
 
+def _telegram(method, **params):
+    """Call the Telegram Bot API; returns the parsed JSON, or None on any failure. Never raises or prints the
+    URL, because it contains the bot token (requests puts the URL in its error messages)."""
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/{method}", json=params, timeout=15)
+    except requests.RequestException:
+        print(f"telegram {method}: network error")
+        return None
+    if not r.ok:
+        print(f"telegram {method} failed: {r.status_code} {r.text}")
+        return None
+    return r.json()
+
+
 def send_telegram(text):
-    token, chat_id = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
-    if not (token and chat_id):
-        print("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set, printing report instead:\n" + text)
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not (os.environ.get("TELEGRAM_BOT_TOKEN") and chat_id):
+        print("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set, printing message instead:\n" + text)
         return
     # ponytail: truncated to Telegram's 4096-char cap, split into several messages if reports outgrow it
-    r = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": text[:4096]},
-        timeout=10,
-    )
-    # not raise_for_status(): its error message embeds the URL, i.e. the bot token
-    print("telegram report sent" if r.ok else f"telegram send failed: {r.status_code} {r.text}")
+    if _telegram("sendMessage", chat_id=chat_id, text=text[:4096]):
+        print("telegram message sent")
 
 
 def drain_events():
@@ -587,6 +596,37 @@ def _exit_when_closed():
             os._exit(0)
 
 
+def build_status(account, positions, orders, bench, top=6):
+    """The dashboard, minimised for a phone: a few short lines, no tables."""
+    equity, last = float(account.equity), float(account.last_equity)
+    invested = sum(float(p.market_value) for p in positions)
+    lines = ["Helm status", f"Equity ${equity:,.2f} ({usd_signed(equity - last)} since last close)"]
+    sleeves = [v for v in (bench or {}).get("sleeves", {}).values() if v["bought"] > 0]
+    if sleeves:
+        bot, hold = sum(v["bot"] for v in sleeves), sum(v["bench"] for v in sleeves)
+        lines.append(f"{'Ahead of' if bot >= hold else 'Behind'} buy-and-hold by ${abs(bot - hold):,.2f} since {bench['since']:%b %d} "
+                     f"(bot {usd_signed(bot)}, hold {usd_signed(hold)})")
+    lines.append(f"Invested ${invested:,.2f} ({invested / equity:.1%}), cash ${float(account.cash):,.2f}")
+    lines += ["", "Top positions"]
+    for p in sorted(positions, key=lambda p: float(p.market_value), reverse=True)[:top]:
+        lines.append(f"{position_ticker(p).replace('-', '/')} ${float(p.market_value):,.2f} {float(p.unrealized_plpc):+.2%}")
+    if not positions:
+        lines.append("none")
+    queued = [o for o in orders if o.side == OrderSide.BUY]
+    if queued:
+        lines += ["", f"Queued: {len(queued)} buys, ${sum(float(o.notional or 0) for o in queued):,.2f}"]
+    return "\n".join(lines)
+
+
+def send_status():
+    """Send the phone-sized status to Telegram. Started on demand (by the Cloudflare Worker that receives /status)."""
+    try:
+        client = get_trading_client()
+        send_telegram(build_status(client.get_account(), client.get_all_positions(), open_orders(), get_benchmark()))
+    except Exception as e:
+        send_telegram(f"Could not fetch the status: {e}")
+
+
 def web(port=8000, exit_when_closed=False):
     # ponytail: 127.0.0.1 only and no login — fine for a single-user machine, add auth before ever exposing it
     # ponytail: two tabs open = closing one stops the server for both (poll interval 30s > BYE_GRACE)
@@ -598,7 +638,7 @@ def web(port=8000, exit_when_closed=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["signal", "backtest", "trade", "recommend", "rebalance", "auto", "watch", "stoploss", "report", "web"])
+    parser.add_argument("mode", choices=["signal", "backtest", "trade", "recommend", "rebalance", "auto", "watch", "stoploss", "status", "report", "web"])
     parser.add_argument("tickers", nargs="*", help="e.g. AAPL BHP.AX BBCA.JK (default: all configured markets)")
     parser.add_argument("--qty", type=int, default=1, help="shares per order in trade mode")
     parser.add_argument("--top-n", type=int, help="recommend: how many BUY/SELL picks to show (default 10); auto: how many to buy (default 5)")
@@ -616,6 +656,8 @@ if __name__ == "__main__":
         watch_stop_losses(interval=args.interval)
     elif args.mode == "stoploss":
         stoploss_alert()
+    elif args.mode == "status":
+        send_status()
     elif args.mode == "report":
         report()
     elif args.mode == "web":
