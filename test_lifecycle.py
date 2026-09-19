@@ -1,5 +1,5 @@
-"""assert-based self-check: with --exit-when-closed the server stops when the page says goodbye (or goes silent)
-but survives a reload; without the flag it never stops on its own. Runs a throwaway copy with the timers shortened."""
+"""assert-based self-check: with --exit-when-closed the server stops when the page says goodbye but survives a
+reload; without the flag it never stops on its own. Runs a throwaway copy with the grace period shortened."""
 import os
 import shutil
 import socket
@@ -37,7 +37,7 @@ def stopped_within(proc, seconds):
 def demo():
     with tempfile.TemporaryDirectory() as d:
         src = (Path(__file__).parent / "bot.py").read_text()
-        short = src.replace("BYE_GRACE = 8 ", "BYE_GRACE = 1 ").replace("IDLE_EXIT = 300 ", "IDLE_EXIT = 4 ")
+        short = src.replace("BYE_GRACE = 8 ", "BYE_GRACE = 1 ")
         assert short != src, "constants moved: update this test"
         (Path(d) / "bot.py").write_text(short)
         shutil.copy(Path(__file__).parent / "dashboard.html", d)
@@ -56,9 +56,8 @@ def demo():
             time.sleep(2.5)
             assert proc.poll() is None and requests.get(url + "/").status_code == 200, "a reload must not stop the server"
 
-            # goodbye lost (tab suspended / crashed): idle fallback
-            requests.get(url + "/")
-            assert stopped_within(proc, 8), "must exit after IDLE_EXIT of silence"
+            requests.post(url + "/api/bye", headers={"Origin": url})  # let the reload-survivor go so it doesn't linger
+            assert stopped_within(proc, 6)
 
             # plain `web` (no flag) is a normal always-on server
             proc, url = start(d); procs.append(proc)

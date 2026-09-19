@@ -3,7 +3,7 @@
 Trades on an [Alpaca](https://alpaca.markets) **paper** account using price forecasts from
 [Kronos](https://github.com/shiyu-coder/Kronos), a time-series foundation model for candlesticks.
 Runs daily on GitHub Actions, messages you a summary on Telegram, and has a local web dashboard
-where you can watch trades, close positions and pause new buys.
+where you can watch trades and close positions.
 
 ![The Helm dashboard: your trades vs buy-and-hold, equity, and open positions](docs/dashboard.png)
 
@@ -20,12 +20,11 @@ The bot never shorts. SELL only closes a position you already hold.
 
 ## The daily run (`python bot.py auto`)
 
-1. **Stop-loss:** close any position down 5% or more from entry (`STOP_LOSS_PCT`). This also runs on its own every 30 minutes, see [Stop-loss workflow](#stop-loss-workflow).
+1. **Stop-loss:** close any position down 5% or more from entry (`STOP_LOSS_PCT`). Any pending BUY for that ticker is cancelled first, because Alpaca rejects a sell while an opposite-side order is open. This also runs on its own every 30 minutes, see [Stop-loss workflow](#stop-loss-workflow).
 2. **Signal exit:** re-forecast the held positions of this run's asset class (stocks for `auto`, crypto for `auto --crypto`) and close any that flipped to SELL.
 3. **Drawdown halt:** if equity is more than 25% below `baseline.json`, skip new buys.
-4. **Pause:** if the `PAUSED` file exists, skip new buys (see [Human override](#human-override)).
-5. **Scan and buy:** forecast the universe (minus what you already hold) and buy `--notional` dollars of each of the top `--top-n` BUY signals
-   **you don't already hold**. With `--budget N`, it stops buying once N dollars are held across all positions.
+4. **Scan and buy:** forecast the universe (minus what you already hold) and buy `--notional` dollars of each of the top `--top-n` BUY signals
+   **you don't already hold** (a buy that's queued or unfilled counts as held, so nothing is bought twice). The crypto run first cancels crypto buys that are still unfilled after 24 hours. With `--budget N`, it stops buying once N dollars are held across all positions.
 
 The universe is the S&P 500 (`auto`) or every tradable Alpaca `/USD` crypto pair (`auto --crypto`).
 A failure on one ticker (fetch, forecast or order, including a rejected order) is logged and skipped, it doesn't abort the run.
@@ -143,15 +142,15 @@ follows your macOS light/dark setting.
 
 Opening **Helm** starts the server and opens the page in your default browser. Close the page and the server shuts
 itself down a few seconds later, so nothing keeps running or listening. Opening the app again just restarts it
-(a couple of seconds). If a page is left open but suspended, the server also exits after 5 minutes of silence and
-the page tells you to open Helm again.
+(a couple of seconds). If your browser crashes before it can say goodbye, the server keeps running until you open
+Helm and close the page again, or run `pkill -f "bot.py web"`.
 
 Not on macOS, or prefer a terminal? `python bot.py web` (then open http://localhost:8000) runs it until you stop it;
 add `--exit-when-closed` for the close-to-stop behaviour. Safari's File > Add to Dock also works, but only while the
 server is already running, since a Dock web app can't start it.
 
 The server is light: about 100 MB of RAM, no CPU while idle, and it never loads the Kronos model.
-Edits to `dashboard.html` show up on the next refresh, and it restarts itself within a second of `bot.py` being saved.
+Edits to `dashboard.html` show up on the next refresh; after editing `bot.py`, close and reopen Helm.
 Errors and startup output go to `dashboard.log`. Two open tabs share one server, so closing either stops it.
 
 It listens on `127.0.0.1` only, has no login, and refuses requests with a foreign `Host` header, and POSTs that
@@ -169,14 +168,10 @@ Only a few days of trades says little about the strategy either way.
 
 ## Human override
 
-The bot trades on its own; the dashboard lets you step in.
+The bot trades on its own. The dashboard's **Close** button sells a whole position at market.
 
-- **Close**: sells that whole position at market.
-- **Pause new buys / Resume buying**: creates or deletes the `PAUSED` file, commits and pushes it to
-  `main` so the GitHub Actions run sees it. While paused, `auto` and `rebalance` open nothing new, but
-  stop-loss and signal exits still run. Run the dashboard from `main`, since the button refuses to push
-  from another branch.
-  You can do the same by hand (`touch PAUSED`, commit, push) or disable the workflow in GitHub.
+To **stop new buys**, turn off the Daily Trade workflow in GitHub (Actions > Daily Trade > "..." > Disable workflow).
+Leave **Stop-loss check** on so losing positions still get sold. Turn Daily Trade back on to resume.
 
 ## Settings
 

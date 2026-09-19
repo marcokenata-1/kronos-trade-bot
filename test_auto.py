@@ -7,7 +7,7 @@ from unittest.mock import patch
 import bot
 
 
-def run(results, positions, budget=None, reject=(), notional=10.0, tickers=None):
+def run(results, positions, budget=None, reject=(), notional=10.0, tickers=None, orders=(), crypto=False):
     bought = []
 
     def fake_order(ticker, side, notional):
@@ -17,17 +17,18 @@ def run(results, positions, budget=None, reject=(), notional=10.0, tickers=None)
         return SimpleNamespace(id=ticker)
 
     scanned = []
-    client = SimpleNamespace(get_all_positions=lambda: positions)
+    cancelled = []
+    client = SimpleNamespace(get_all_positions=lambda: positions, get_orders=lambda req: list(orders),
+                             cancel_order_by_id=cancelled.append)
     with tempfile.TemporaryDirectory() as d, \
          patch.object(bot, "EVENTS_FILE", Path(d) / "events.log"), \
          patch.object(bot, "get_trading_client", return_value=client), \
          patch.object(bot, "check_stop_losses"), patch.object(bot, "check_signal_exits"), \
          patch.object(bot, "check_drawdown_halt", return_value=False), \
-         patch.object(bot, "is_paused", return_value=False), \
          patch.object(bot, "scan", side_effect=lambda ts: scanned.append(list(ts)) or [r for r in results if r[0] in ts]), \
          patch.object(bot, "place_order", side_effect=fake_order):
-        bot.auto_trade(list(tickers or [r[0] for r in results]), top_n=5, notional=notional, budget=budget)
-    run.scanned = scanned
+        bot.auto_trade(list(tickers or [r[0] for r in results]), top_n=5, notional=notional, budget=budget, crypto=crypto)
+    run.scanned, run.cancelled = scanned, cancelled
     return bought
 
 
@@ -41,6 +42,26 @@ def check_exit_scope():
              patch.object(bot, "signal", side_effect=lambda t: forecast.append(t) or ("HOLD", 0.0)):
             bot.check_signal_exits(crypto)
         assert forecast == expected, (crypto, forecast)
+
+
+def check_pending_orders():
+    """queued buys count as held; unfilled crypto buys are cancelled after 24h and skipped this run"""
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+
+    def order(id, symbol, hours_old, side=bot.OrderSide.BUY):
+        return SimpleNamespace(id=id, symbol=symbol, side=side, notional="10", submitted_at=now - timedelta(hours=hours_old))
+
+    results = [("AAA", "BUY", 0.09), ("BBB", "BUY", 0.08)]
+    assert run(results, [], orders=[order("q1", "AAA", 60)]) == ["BBB"], "AAA is queued (e.g. over the weekend), don't buy it twice"
+    assert run.cancelled == [], "stale STOCK buys are legitimately waiting for the open"
+
+    coin = [("WIF-USD", "BUY", 0.5), ("ETH-USD", "BUY", 0.4), ("SOL-USD", "BUY", 0.3)]
+    stuck, fresh = order("old", "WIF/USD", 30), order("new", "SOL/USD", 1)
+    assert run(coin, [], orders=[stuck, fresh], crypto=True) == ["ETH-USD"], "stuck WIF cancelled and skipped, fresh SOL still pending"
+    assert run.cancelled == ["old"], run.cancelled
+    assert run(coin, [], orders=[stuck], crypto=False) == ["ETH-USD", "SOL-USD"], "the stock run still treats WIF as pending"
+    assert run.cancelled == [], "the stock run must not cancel crypto orders"
 
 
 def demo():
@@ -62,6 +83,7 @@ def demo():
 
     assert run(buys, [], reject={"AAA"}) == ["BBB", "CCC"], "one rejected order must not stop the rest"
     check_exit_scope()
+    check_pending_orders()
     print("ok")
 
 

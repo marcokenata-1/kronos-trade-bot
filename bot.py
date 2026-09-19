@@ -4,8 +4,8 @@ import sys
 import json
 import time
 import argparse
-import subprocess
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,7 +38,6 @@ DRAWDOWN_HALT_PCT = 0.25  # stop opening new positions once equity is down this 
 
 BASELINE_FILE = Path(__file__).parent / "baseline.json"
 EVENTS_FILE = Path(__file__).parent / ".daily_events.log"  # notes from today's runs, drained by `report`
-PAUSE_FILE = Path(__file__).parent / "PAUSED"  # present = no new buys; committed, so GitHub Actions sees it
 DASHBOARD_FILE = Path(__file__).parent / "dashboard.html"
 
 _predictor = None
@@ -93,6 +92,37 @@ def place_order(ticker, side, qty=None, notional=None):
     return get_trading_client().submit_order(order)
 
 
+def open_orders():
+    return get_trading_client().get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500))
+
+
+def sell_position(symbol):
+    """Close a position after cancelling its pending BUY orders: Alpaca refuses a sell while an opposite-side
+    order is open on the same symbol (a possible wash trade), and a buy we're about to undo is pointless anyway."""
+    client = get_trading_client()
+    for o in open_orders():
+        if o.side == OrderSide.BUY and o.symbol.replace("/", "") == symbol:  # positions say "BTCUSD", orders "BTC/USD"
+            client.cancel_order_by_id(o.id)
+    client.close_position(symbol)
+
+
+def cancel_stale_crypto_buys(max_age=timedelta(hours=24)):
+    """Cancel crypto BUY orders still unfilled after `max_age`: crypto trades 24/7, so that means stuck.
+    Returns their tickers, so this run doesn't just queue the same order again."""
+    cutoff = datetime.now(timezone.utc) - max_age
+    stale = set()
+    for o in open_orders():
+        if o.side == OrderSide.BUY and "/" in o.symbol and o.submitted_at < cutoff:
+            try:
+                get_trading_client().cancel_order_by_id(o.id)
+            except Exception as e:  # e.g. it filled a moment ago
+                print(f"could not cancel stale {o.symbol} buy ({e})")
+                continue
+            stale.add(o.symbol.replace("/", "-"))
+            note(f"CANCELLED {o.symbol} buy of ${float(o.notional or 0):.2f}: still unfilled after {max_age.total_seconds() / 3600:.0f}h")
+    return stale
+
+
 def get_baseline():
     if BASELINE_FILE.exists():
         return json.loads(BASELINE_FILE.read_text())["equity"]
@@ -106,7 +136,7 @@ def check_stop_losses():
         plpc = float(position.unrealized_plpc)
         if plpc <= -STOP_LOSS_PCT:
             try:
-                client.close_position(position.symbol)
+                sell_position(position.symbol)
                 note(f"SOLD {position.symbol}: stop-loss, down {plpc:+.2%} from entry")
             except Exception as e:
                 print(f"stop-loss: failed to close {position.symbol} ({e})")
@@ -142,32 +172,10 @@ def check_signal_exits(crypto):
             continue
         if direction == "SELL":
             try:
-                get_trading_client().close_position(position.symbol)
+                sell_position(position.symbol)
                 note(f"SOLD {position.symbol}: Kronos forecast flipped to {change:+.2%} over the next {PRED_LEN} days")
             except Exception as e:
                 print(f"signal exit: failed to close {position.symbol} ({e})")
-
-
-def is_paused():
-    return PAUSE_FILE.exists()
-
-
-def set_paused(paused):
-    """Create/delete the PAUSED flag and push it, so the GitHub Actions run sees it too."""
-    if is_paused() == paused:
-        return
-
-    def git(*args):
-        return subprocess.run(["git", *args], cwd=PAUSE_FILE.parent, check=True, capture_output=True, text=True).stdout.strip()
-
-    # ponytail: pushes to main only (what the cron checks out); no retry if CI pushed baseline.json mid-toggle
-    if git("branch", "--show-current") != "main":
-        raise RuntimeError("run the dashboard from the main branch so the pause reaches GitHub Actions")
-    git("pull", "--ff-only")
-    PAUSE_FILE.touch() if paused else PAUSE_FILE.unlink()
-    git("add", PAUSE_FILE.name)
-    git("commit", "-m", "Pause new buys" if paused else "Resume buying", "--", PAUSE_FILE.name)
-    git("push")
 
 
 def check_drawdown_halt():
@@ -198,10 +206,6 @@ def rebalance(pool=None, split=4):
     print(f"equity ${equity:.2f} vs baseline ${baseline:.2f} ({equity / baseline:.2f}x)")
 
     if equity < 2 * baseline:
-        return
-
-    if is_paused():
-        note("PAUSED: equity doubled but skipping the reinvestment buys")
         return
 
     pool = (pool or MARKETS["US"] + MARKETS["CRYPTO"])[:split]
@@ -346,7 +350,7 @@ def recommend(tickers, top_n=10):
 
 def auto_trade(tickers, top_n=5, notional=2.0, budget=None, crypto=False):
     """Exit losers (stop-loss + signal flip), then, unless the drawdown circuit breaker
-    or the pause flag is on, scan `tickers` and buy $notional of the top_n BUY signals
+    is tripped, scan `tickers` and buy $notional of the top_n BUY signals
     you don't already hold. `budget` caps total dollars held across all positions."""
     check_stop_losses()
     check_signal_exits(crypto)
@@ -354,15 +358,13 @@ def auto_trade(tickers, top_n=5, notional=2.0, budget=None, crypto=False):
     if check_drawdown_halt():
         return
 
-    if is_paused():
-        note("PAUSED: skipping new buys (delete the PAUSED file or press Resume in the dashboard)")
-        return
-
+    stale = cancel_stale_crypto_buys() if crypto else set()
     positions = get_trading_client().get_all_positions()
-    held = {position_ticker(p) for p in positions}
+    pending = {o.symbol.replace("/", "-") for o in open_orders() if o.side == OrderSide.BUY}  # queued or unfilled buys
+    held = {position_ticker(p) for p in positions} | pending | stale
     invested = sum(float(p.market_value) for p in positions)
 
-    results = scan([t for t in tickers if t not in held])  # held ones were just re-forecast by the exit check
+    results = scan([t for t in tickers if t not in held])  # held ones were just re-forecast by the exit check; pending ones are already bought
     buys = sorted((r for r in results if r[1] == "BUY"), key=lambda r: r[2], reverse=True)[:top_n]
 
     if not buys:
@@ -502,7 +504,6 @@ def dashboard_state():
     orders = client.get_orders(GetOrdersRequest(status=QueryOrderStatus.ALL, limit=50))
     return {
         "paper": not is_live(),
-        "paused": is_paused(),
         "equity": float(account.equity),
         "last_equity": float(account.last_equity),
         "cash": float(account.cash),
@@ -520,11 +521,9 @@ def dashboard_state():
 
 
 BYE_GRACE = 8    # seconds the server waits after the page says goodbye (a reload sends a request straight after)
-IDLE_EXIT = 300  # ...or exits after this long with no requests at all, in case the goodbye never arrives
 
 
 class Dashboard(BaseHTTPRequestHandler):
-    last_seen = time.time()
     bye_at = None
 
     def _reply(self, code, body, ctype="application/json"):
@@ -544,7 +543,7 @@ class Dashboard(BaseHTTPRequestHandler):
         elif self.command == "POST" and self.headers.get("X-Requested-With") != "dashboard" and self.headers.get("Origin") != f"http://{host}":
             self._reply(403, {"error": "cross-site request refused"})
         else:
-            Dashboard.last_seen, Dashboard.bye_at = time.time(), None  # any request cancels a pending goodbye
+            Dashboard.bye_at = None  # any request cancels a pending goodbye
             return True
 
     def do_GET(self):
@@ -565,12 +564,9 @@ class Dashboard(BaseHTTPRequestHandler):
         if self.path == "/api/bye":
             Dashboard.bye_at = time.time() + BYE_GRACE
             self._reply(200, {"ok": True})
-        elif self.path == "/api/pause":
-            paused = bool(json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0) or "{}").get("paused"))
-            self._api(lambda: set_paused(paused))
         elif self.path.startswith("/api/close/"):
             symbol = self.path[len("/api/close/"):]
-            self._api(lambda: get_trading_client().close_position(symbol))  # closes only what's actually held
+            self._api(lambda: sell_position(symbol))  # closes only what's actually held
         else:
             self._reply(404, {"error": "not found"})
 
@@ -581,26 +577,12 @@ class Dashboard(BaseHTTPRequestHandler):
             self._reply(500, {"error": getattr(e, "stderr", None) or str(e)})
 
 
-def _restart_when_changed(path, interval=1.0):
-    """Re-exec this process when `path` changes, so edits to bot.py show up without restarting the dashboard by hand."""
-    last = path.stat().st_mtime
-    while True:
-        time.sleep(interval)
-        try:
-            changed = path.stat().st_mtime != last
-        except FileNotFoundError:  # editor mid-save
-            continue
-        if changed:
-            print(f"{path.name} changed, restarting dashboard", flush=True)
-            os.execv(sys.executable, [sys.executable, *sys.argv])
-
-
 def _exit_when_closed():
-    """Exit once the page has said goodbye (and not come back), or has been silent for IDLE_EXIT seconds."""
+    """Exit once the page has said goodbye and not come back."""
+    # ponytail: if the browser crashes before sending the goodbye the server keeps running; reopen and close the page, or `pkill -f "bot.py web"`
     while True:
         time.sleep(1)
-        now = time.time()
-        if (Dashboard.bye_at and now > Dashboard.bye_at) or now - Dashboard.last_seen > IDLE_EXIT:
+        if Dashboard.bye_at and time.time() > Dashboard.bye_at:
             print("dashboard closed, shutting down", flush=True)
             os._exit(0)
 
@@ -609,7 +591,6 @@ def web(port=8000, exit_when_closed=False):
     # ponytail: 127.0.0.1 only and no login — fine for a single-user machine, add auth before ever exposing it
     # ponytail: two tabs open = closing one stops the server for both (poll interval 30s > BYE_GRACE)
     print(f"dashboard at http://localhost:{port} ({'LIVE' if is_live() else 'paper'} account)", flush=True)
-    threading.Thread(target=_restart_when_changed, args=(Path(__file__),), daemon=True).start()
     if exit_when_closed:
         threading.Thread(target=_exit_when_closed, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), Dashboard).serve_forever()

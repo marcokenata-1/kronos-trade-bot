@@ -15,6 +15,7 @@ def run(plpc):
     client = SimpleNamespace(
         get_all_positions=lambda: [SimpleNamespace(symbol="ARBUSD", unrealized_plpc=str(plpc))],
         close_position=closed.append,
+        get_orders=lambda req: [],
     )
     with tempfile.TemporaryDirectory() as d, \
          patch.object(bot, "EVENTS_FILE", Path(d) / "events.log"), \
