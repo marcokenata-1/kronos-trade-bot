@@ -16,3 +16,4 @@ echo "=== $(date) (day $ELAPSED_DAYS) ===" >> run.log
 python bot.py auto >> run.log 2>&1
 python bot.py auto --crypto --notional 10 >> run.log 2>&1
 python bot.py rebalance >> run.log 2>&1
+python bot.py report >> run.log 2>&1

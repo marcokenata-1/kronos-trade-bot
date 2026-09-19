@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="application-name" content="Kronos">
+<title>Kronos trades</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2064%2064%22%3E%3Crect%20width=%2264%22%20height=%2264%22%20rx=%2214%22%20fill=%22%232a78d6%22/%3E%3Cpath%20d=%22M22%2015v34M45%2015L27%2032l18%2017%22%20fill=%22none%22%20stroke=%22%23fff%22%20stroke-width=%226%22%20stroke-linecap=%22round%22%20stroke-linejoin=%22round%22/%3E%3C/svg%3E">
+<style>
+  :root {
+    color-scheme: light dark;
+    --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #6b6a64; --line: #e7e6e2; --wash: #f3f2ef;
+    --bot: #2a78d6; --bench: #8d8c85; --gain: #006300; --loss: #b3261e; --gain-bar: #2a78d6; --loss-bar: #e34948;
+    --notice: #fff4d6; --live: #d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface: #1a1a19; --ink: #f4f4f1; --ink-2: #c3c2b7; --ink-3: #8f8e85; --line: #2f2f2d; --wash: #242423;
+      --bot: #3987e5; --bench: #6f6e68; --gain: #0ca30c; --loss: #e66767; --gain-bar: #3987e5; --loss-bar: #e66767;
+      --notice: #3a3320;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--surface); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased;
+  }
+  body.live { border-top: 4px solid var(--live); }
+  main, header, .notice { max-width: 1040px; margin-inline: auto; padding-inline: 24px; }
+  h2 { font-size: 16px; font-weight: 600; margin: 0 0 12px; letter-spacing: -.005em; }
+  h2 span { color: var(--ink-3); font-weight: 400; margin-left: 6px; }
+  button {
+    font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 8px;
+    padding: 5px 12px; cursor: pointer; white-space: nowrap;
+  }
+  button:hover { background: var(--wash); }
+  :focus-visible { outline: 2px solid var(--bot); outline-offset: 2px; }
+
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding-block: 20px; }
+  .brand { font-weight: 650; font-size: 15px; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; }
+  .brand img { width: 22px; height: 22px; border-radius: 6px; }
+  .status { margin-left: auto; color: var(--ink-3); text-align: right; }
+  body.live .status b { color: var(--live); }
+
+  .notice { display: none; }
+  .notice p { margin: 0 0 8px; padding: 10px 14px; background: var(--notice); border-radius: 8px; }
+
+  /* the verdict: one large figure, then the evidence beside it */
+  .verdict { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 48px; padding-block: 36px 40px; align-items: start; }
+  .fig { display: block; font-size: clamp(48px, 8vw, 84px); line-height: 1; font-weight: 600; letter-spacing: -.035em; }
+  .verdict-word { display: block; margin-top: 8px; font-size: 20px; font-weight: 500; color: var(--ink-2); letter-spacing: -.01em; }
+  .lede { margin: 20px 0 0; max-width: 46ch; color: var(--ink-2); font-size: 15px; }
+  .fine { margin: 12px 0 0; max-width: 52ch; color: var(--ink-3); font-size: 12.5px; }
+
+  .pair + .pair { margin-top: 22px; }
+  .pair-head { display: flex; justify-content: space-between; margin-bottom: 8px; font-weight: 600; }
+  .pair-head span { font-weight: 400; color: var(--ink-3); }
+  .bar-row { display: grid; grid-template-columns: 84px 1fr 78px; align-items: center; gap: 10px; margin-top: 6px; }
+  .who { color: var(--ink-2); }
+  .val { text-align: right; font-variant-numeric: tabular-nums; }
+  .track { position: relative; height: 12px; }
+  .track::before { content: ""; position: absolute; left: var(--axis); top: -3px; bottom: -3px; width: 1px; background: var(--line); }
+  .bar { position: absolute; top: 1px; height: 10px; min-width: 2px; background: var(--bench); border-radius: 0 4px 4px 0; }
+  .bar.bot { background: var(--bot); }
+  .bar.neg { border-radius: 4px 0 0 4px; }
+  .bar.gain { background: var(--gain-bar); }
+  .bar.loss { background: var(--loss-bar); }
+  .legend { display: flex; gap: 16px; margin-top: 16px; color: var(--ink-3); font-size: 12.5px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+
+  .money { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin: 0; padding-block: 20px; border-block: 1px solid var(--line); }
+  .money dt { color: var(--ink-3); }
+  .money dd { margin: 2px 0 0; font-size: 20px; font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+  .money small { display: block; margin-top: 2px; font-size: 12.5px; font-weight: 400; color: var(--ink-3); letter-spacing: 0; }
+
+  section { padding-top: 36px; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th { text-align: left; font-weight: 500; color: var(--ink-3); padding: 0 10px 8px 0; border-bottom: 1px solid var(--line); }
+  td { padding: 9px 10px 9px 0; border-bottom: 1px solid var(--line); }
+  .num { text-align: right; }
+  td.bars { width: 170px; padding-left: 20px; }
+  td.act { width: 70px; text-align: right; padding-right: 0; }
+  td.act button { opacity: 0; transition: opacity .12s; }
+  tr:hover td.act button, td.act button:focus-visible { opacity: 1; }
+  @media (hover: none) { td.act button { opacity: 1; } }
+  .up { color: var(--gain); } .down { color: var(--loss); }
+  .muted { color: var(--ink-3); }
+  tr.day td { padding: 18px 0 6px; color: var(--ink-3); font-weight: 500; border-bottom: 0; }
+  .more { margin-top: 14px; }
+  #msg { color: var(--loss); margin-left: 8px; }
+  main { padding-bottom: 72px; }
+  .empty { color: var(--ink-3); padding: 12px 0; }
+
+  @media (max-width: 760px) {
+    .verdict { grid-template-columns: 1fr; gap: 32px; }
+    .money { grid-template-columns: 1fr 1fr; }
+    td.bars, th.bars { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<header>
+  <span class="brand"><img src="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2064%2064%22%3E%3Crect%20width=%2264%22%20height=%2264%22%20rx=%2214%22%20fill=%22%232a78d6%22/%3E%3Cpath%20d=%22M22%2015v34M45%2015L27%2032l18%2017%22%20fill=%22none%22%20stroke=%22%23fff%22%20stroke-width=%226%22%20stroke-linecap=%22round%22%20stroke-linejoin=%22round%22/%3E%3C/svg%3E" alt="">Kronos</span>
+  <span class="status" id="status">Loading…</span>
+  <button id="pause" hidden></button>
+</header>
+<div class="notice" id="notice"><p>New buys are paused. The daily run still sells losers and forecast reversals, but won't open anything new.</p></div>
+
+<main>
+  <div class="verdict" aria-live="polite">
+    <div id="hero"><span class="fig">…</span><p class="lede">Comparing your trades with buy-and-hold…</p></div>
+    <div id="pairs"></div>
+  </div>
+
+  <dl class="money" id="money"></dl>
+
+  <section aria-labelledby="pos-h"><h2 id="pos-h">Positions</h2><table id="positions"></table></section>
+  <section aria-labelledby="ord-h"><h2 id="ord-h">Recent orders</h2><table id="orders"></table><button class="more" id="more" hidden></button><span id="msg" role="alert"></span></section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const MINUS = "−";
+const abs$ = n => Math.abs(+n).toLocaleString("en-US", { style: "currency", currency: "USD" });
+const money = n => (n < 0 ? MINUS : "+") + abs$(n);
+// token prices like BONK ($0.0000088) need more than 2 decimals
+const price = n => (+n).toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: n < 1 ? 8 : 2 });
+const pct = n => (n < 0 ? MINUS : "+") + Math.abs(n * 100).toFixed(2) + "%";
+const tone = n => (n < 0 ? "down" : "up");
+
+function h(tag, props = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) k === "style" || k.startsWith("aria-") ? el.setAttribute(k, v) : (el[k] = v);
+  el.append(...kids);
+  return el;
+}
+const span = (text, className) => h("span", { className }, text);
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : {
+    method: "POST",
+    headers: { "X-Requested-With": "dashboard", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error);
+  return json;
+}
+
+// one shared zero-based axis per set of bars, so lengths are comparable
+function axis(values) {
+  const lo = Math.min(0, ...values), hi = Math.max(0, ...values), range = hi - lo || 1;
+  const zero = (-lo / range) * 100;
+  return v => {
+    const width = (Math.abs(v) / range) * 100;
+    return { zero, left: v < 0 ? zero - width : zero, width, neg: v < 0 };
+  };
+}
+const bar = (g, cls, title) => h("i", { className: `bar ${cls}${g.neg ? " neg" : ""}`, title, style: `left:${g.left}%;width:${g.width}%` });
+const track = (g, ...bars) => h("div", { className: "track", style: `--axis:${g.zero}%` }, ...bars);
+
+function table(el, head, rows) {
+  el.replaceChildren(h("thead", {}, h("tr", {}, ...head.map(([t, cls]) => h("th", { className: cls || "" }, t)))), h("tbody", {}, ...rows));
+}
+const cell = (kid, className = "") => h("td", { className }, kid);
+const ticker = (symbol, crypto) => (crypto ? symbol.replace(/USD$/, "/USD") : symbol);
+
+let state, ordersShown = 20, showAll = false;
+
+async function act(fn, confirmText) {
+  if (!confirm(confirmText)) return;
+  $("msg").textContent = "";
+  try { await fn(); } catch (e) { $("msg").textContent = e.message; }
+  refresh();
+}
+
+function renderState(s) {
+  document.body.classList.toggle("live", !s.paper);
+  $("status").replaceChildren(h("b", {}, s.paper ? "Paper account" : "Live account, real money"), `  updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`);
+  $("notice").style.display = s.paused ? "block" : "none";
+  $("pause").hidden = false;
+  $("pause").textContent = s.paused ? "Resume buying" : "Pause new buys";
+
+  const change = s.equity - s.last_equity, invested = s.positions.reduce((a, p) => a + p.market_value, 0);
+  $("money").replaceChildren(
+    ...[
+      ["Equity", abs$(s.equity), h("small", {}, `${abs$(s.last_equity)} at last close`)],
+      ["Since last close", span(money(change), tone(change)), h("small", {}, pct(change / s.last_equity))],
+      ["Invested", abs$(invested), h("small", {}, `${((invested / s.equity) * 100).toFixed(1)}% of equity`)],
+      ["Cash", abs$(s.cash), h("small", {}, `${s.positions.length} open positions`)],
+    ].flatMap(([label, value, note]) => [h("div", {}, h("dt", {}, label), h("dd", {}, value, note))]),
+  );
+
+  const scale = axis(s.positions.map(p => p.plpc));
+  const rows = [...s.positions].sort((a, b) => b.market_value - a.market_value).map(p => {
+    const g = scale(p.plpc);
+    const close = h("button", { "aria-label": `Close ${p.symbol}`, onclick: () => act(() => api("/api/close/" + encodeURIComponent(p.symbol), {}), `Sell your entire ${ticker(p.symbol, p.crypto)} position at market?`) }, "Close");
+    return h("tr", {},
+      cell(ticker(p.symbol, p.crypto)),
+      cell(abs$(p.market_value), "num"),
+      cell(track(g, bar(g, p.plpc < 0 ? "loss" : "gain", pct(p.plpc))), "bars"),
+      cell(span(money(p.pl), tone(p.pl)), "num"),
+      cell(span(pct(p.plpc), tone(p.plpc)), "num"),
+      cell(close, "act"));
+  });
+  if (rows.length) table($("positions"), [["Symbol"], ["Value", "num"], ["", "bars"], ["P/L", "num"], ["Return", "num"], [""]], rows);
+  else $("positions").replaceChildren(h("caption", { className: "empty" }, "No open positions. The daily run buys when Kronos forecasts a rise."));
+
+  renderOrders(s.orders);
+}
+
+const STATUS = { filled: "Filled", new: "Waiting", accepted: "Waiting", pending_new: "Waiting", partially_filled: "Partly filled" };
+function renderOrders(orders) {
+  const shown = showAll ? orders : orders.slice(0, ordersShown), rows = [];
+  let lastDay;
+  for (const o of shown) {
+    const d = new Date(o.time), day = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    if (day !== lastDay) rows.push(h("tr", { className: "day" }, h("td", { colSpan: 5 }, day)));
+    lastDay = day;
+    const amount = o.notional ? abs$(o.notional) : `${(+o.qty).toLocaleString(undefined, { maximumSignificantDigits: 6 })} units`;
+    rows.push(h("tr", {},
+      cell(span(d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }), "muted")),
+      cell(`${o.side === "buy" ? "Bought" : "Sold"} ${o.symbol}`),
+      cell(amount, "num"),
+      cell(o.filled_avg_price ? `at ${price(o.filled_avg_price)}` : "", "num"),
+      cell(STATUS[o.status] || o.status[0].toUpperCase() + o.status.slice(1).replace(/_/g, " "), "num")));
+  }
+  if (rows.length) table($("orders"), [["Time"], ["Order"], ["Amount", "num"], ["Fill price", "num"], ["Status", "num"]], rows);
+  else $("orders").replaceChildren(h("caption", { className: "empty" }, "No orders yet."));
+  $("more").hidden = showAll || orders.length <= ordersShown;
+  $("more").textContent = `Show all ${orders.length}`;
+}
+
+const NAMES = { stocks: "Stocks", crypto: "Crypto" };
+function renderBenchmark(b) {
+  const sleeves = Object.entries((b && b.sleeves) || {}).filter(([, v]) => v.bought > 0);
+  if (!sleeves.length) {
+    $("hero").replaceChildren(h("span", { className: "fig" }, "No trades yet"), h("p", { className: "lede" }, b ? "Once the bot has filled orders, this page compares them with simply buying and holding SPY and BTC." : "The buy-and-hold comparison is unavailable right now. Positions and orders below are still current."));
+    $("pairs").replaceChildren();
+    return;
+  }
+  const bot = sleeves.reduce((a, [, v]) => a + v.bot, 0), bench = sleeves.reduce((a, [, v]) => a + v.bench, 0), diff = bot - bench;
+  const since = new Date(b.since + "T00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const names = sleeves.map(([, v]) => v.benchmark).join(" and ");
+  $("hero").replaceChildren(
+    h("span", { className: "fig" }, money(diff)),
+    h("span", { className: "verdict-word" }, diff >= 0 ? "ahead of buy-and-hold" : "behind buy-and-hold"),
+    h("p", { className: "lede" }, `Since ${since}, your trades made ${money(bot)}. Putting the same dollars into ${names} on the same days would have made ${money(bench)}.`),
+    h("p", { className: "fine" }, "Uses daily closing prices and ignores fees, so treat it as a rough guide. A few days of results says little about the strategy."));
+
+  const scale = axis(sleeves.flatMap(([, v]) => [v.bot, v.bench]));
+  $("pairs").replaceChildren(
+    ...sleeves.map(([key, v]) => {
+      const gb = scale(v.bot), gm = scale(v.bench);
+      return h("div", { className: "pair" },
+        h("div", { className: "pair-head" }, NAMES[key], span(`${abs$(v.bought)} bought`)),
+        h("div", { className: "bar-row" }, span("Your trades", "who"), track(gb, bar(gb, "bot", money(v.bot))), span(money(v.bot), "val")),
+        h("div", { className: "bar-row" }, span(v.benchmark, "who"), track(gm, bar(gm, "", money(v.bench))), span(money(v.bench), "val")));
+    }),
+    h("div", { className: "legend" }, h("span", {}, h("i", { style: "background:var(--bot)" }), "Your trades"), h("span", {}, h("i", { style: "background:var(--bench)" }), "Buy-and-hold")));
+}
+
+async function refresh() {
+  try {
+    state = await api("/api/state");
+    renderState(state);
+  } catch (e) {
+    $("status").textContent = "Could not load: " + e.message;
+  }
+}
+async function refreshBenchmark() {
+  try { renderBenchmark((await api("/api/benchmark")).benchmark); } catch (e) { renderBenchmark(null); }
+}
+
+$("more").onclick = () => { showAll = true; renderOrders(state.orders); };
+$("pause").onclick = () => act(() => api("/api/pause", { paused: !state.paused }),
+  state.paused ? "Resume buying? This commits and pushes the change." : "Pause new buys? This commits and pushes the change.");
+
+refresh(); refreshBenchmark();
+setInterval(refresh, 30000);
+setInterval(refreshBenchmark, 600000);
+</script>

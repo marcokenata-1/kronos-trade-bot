@@ -1,4 +1,6 @@
 """assert-based self-check: one failed close_position must not abort the exit loop."""
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -22,7 +24,9 @@ def demo():
             self.closed.append(symbol)
 
     client = FakeClient()
-    with patch.object(bot, "get_trading_client", return_value=client):
+    with tempfile.TemporaryDirectory() as d, \
+         patch.object(bot, "EVENTS_FILE", Path(d) / "events.log"), \
+         patch.object(bot, "get_trading_client", return_value=client):
         bot.check_stop_losses()  # must not raise despite FAIL's close_position blowing up
 
     assert client.closed == ["OK"], client.closed

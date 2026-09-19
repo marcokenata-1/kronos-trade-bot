@@ -11,6 +11,8 @@ permissions:
 env:
   ALPACA_PAPER_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
   ALPACA_PAPER_SECRET_KEY: ${{ secrets.ALPACA_PAPER_SECRET_KEY }}
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
 jobs:
   trade:
@@ -46,3 +48,7 @@ jobs:
           git add baseline.json
           git diff --cached --quiet || git commit -m "Update baseline"
           git push
+
+      - name: Telegram report
+        if: always()  # still report when an earlier step failed
+        run: python bot.py report
