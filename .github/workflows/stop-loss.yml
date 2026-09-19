@@ -1,0 +1,32 @@
+name: Stop-loss check
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'  # ponytail: every 30 min; GitHub may delay runs under load. Lower it if minutes allow.
+  workflow_dispatch: {}
+
+env:
+  ALPACA_PAPER_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
+  ALPACA_PAPER_SECRET_KEY: ${{ secrets.ALPACA_PAPER_SECRET_KEY }}
+  TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+concurrency:
+  group: stop-loss
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    environment: Paper API Key
+    steps:
+      - uses: actions/checkout@v4  # no submodules: this job never loads Kronos
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # only what the stop-loss path imports, no torch/Kronos, so a run takes seconds
+      - run: pip install alpaca-py python-dotenv yfinance requests
+
+      - run: python bot.py stoploss

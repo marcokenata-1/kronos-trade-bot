@@ -20,7 +20,7 @@ The bot never shorts. SELL only closes a position you already hold.
 
 ## The daily run (`python bot.py auto`)
 
-1. **Stop-loss:** close any position down 10% or more from entry.
+1. **Stop-loss:** close any position down 5% or more from entry (`STOP_LOSS_PCT`). This also runs on its own every 30 minutes, see [Stop-loss workflow](#stop-loss-workflow).
 2. **Signal exit:** re-forecast every held position and close any that flipped to SELL.
 3. **Drawdown halt:** if equity is more than 25% below `baseline.json`, skip new buys.
 4. **Pause:** if the `PAUSED` file exists, skip new buys (see [Human override](#human-override)).
@@ -47,7 +47,8 @@ in your order history is a regular `auto` buy, funded from cash, not from profit
 | `python bot.py recommend [--crypto] [--top-n N] [--limit N]` | Show top BUY/SELL picks without trading |
 | `python bot.py auto [--crypto] [--notional 2] [--top-n 5] [--budget N] [--limit N]` | The daily run above |
 | `python bot.py rebalance [TICKER...] [--split 4]` | Profit reinvestment above |
-| `python bot.py watch [--interval 60]` | Loop forever checking stop-losses (no model) |
+| `python bot.py stoploss` | One stop-loss pass, then a Telegram message if anything was sold (what the 30-minute workflow runs) |
+| `python bot.py watch [--interval 60]` | Loop forever checking stop-losses, for running on your own machine |
 | `python bot.py report` | Send the Telegram summary |
 | `python bot.py web [--port 8000]` | Start the local dashboard |
 
@@ -93,6 +94,14 @@ Add these as **environment secrets** on the `Paper API Key` environment (Setting
 Don't add the live keys there.
 
 `run_daily.sh` is a local cron alternative that runs the same steps and removes itself after 7 days.
+
+### Stop-loss workflow
+
+`.github/workflows/stop-loss.yml` runs `python bot.py stoploss` every 30 minutes and on manual dispatch. It doesn't
+check out the Kronos submodule or install torch (the model is imported lazily), so a run takes seconds. If it sells
+something, it messages you on Telegram straight away, since a separate job's notes can't reach the daily report.
+It uses the same four secrets as the daily run. Public repos run Actions for free; on a private repo each run
+uses about a minute of your monthly allowance, so change the `cron` line if that adds up.
 
 ## Telegram report
 
@@ -174,7 +183,7 @@ Constants at the top of `bot.py`:
 | `LOOKBACK` / `PRED_LEN` | 400 / 10 | Candles in, days forecast |
 | `SIGNAL_THRESHOLD` | 1% | Forecast move needed for BUY/SELL |
 | `SAMPLE_COUNT` | 5 | Forecast paths averaged per ticker |
-| `STOP_LOSS_PCT` | 10% | Sell a position down this much |
+| `STOP_LOSS_PCT` | 5% | Sell a position down this much |
 | `DRAWDOWN_HALT_PCT` | 25% | Stop new buys this far below baseline |
 | `MARKETS` | see file | Tickers for `signal`, `backtest`, `trade` and the `rebalance` pool |
 
@@ -188,7 +197,8 @@ for t in test_*.py; do python $t; done
 
 ## Known limits
 
-- Stop-loss only runs inside `auto`, so once a day, unless `watch` is running.
+- Stop-loss runs about every 30 minutes, not instantly: GitHub can delay scheduled runs, and a stock sold while the market is closed waits for the open. It's a check on current P/L, not an order sitting at Alpaca. Alpaca doesn't take stop orders on dollar-amount (fractional) buys, which is what this bot places.
+- A 5% stop is tight for crypto, where a 5% daily move is normal. Expect some sells that would have recovered, and a rebuy the next day if the signal is still BUY.
 - The daily run scans ~500 stocks on a CPU runner, which is slow.
 - Yahoo Finance prices are used for signals, Alpaca fills may differ.
 - Everything is a market order.

@@ -18,7 +18,6 @@ from alpaca.trading.requests import MarketOrderRequest, GetAssetsRequest, GetOrd
 from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass, QueryOrderStatus
 
 sys.path.insert(0, str(Path(__file__).parent / "vendor" / "kronos"))
-from model import Kronos, KronosTokenizer, KronosPredictor
 
 load_dotenv()
 
@@ -33,7 +32,7 @@ LOOKBACK = 400
 PRED_LEN = 10
 SIGNAL_THRESHOLD = 0.01  # ponytail: flat threshold, tune per-market volatility if signals look noisy
 SAMPLE_COUNT = 5  # averaged internally by the model — cuts single-path noise like the AMD -64% outlier
-STOP_LOSS_PCT = 0.10  # sell a position down this much from entry, regardless of current signal
+STOP_LOSS_PCT = 0.05  # sell a position down this much from entry, regardless of current signal
 DRAWDOWN_HALT_PCT = 0.25  # stop opening new positions once equity is down this much from baseline
 
 BASELINE_FILE = Path(__file__).parent / "baseline.json"
@@ -221,6 +220,8 @@ def rebalance(pool=None, split=4):
 def get_predictor():
     global _predictor
     if _predictor is None:
+        # imported here, not at the top: torch is slow to import, and the stop-loss job never needs it
+        from model import Kronos, KronosTokenizer, KronosPredictor
         tokenizer = KronosTokenizer.from_pretrained("NeoQuasar/Kronos-Tokenizer-base")
         model = Kronos.from_pretrained("NeoQuasar/Kronos-small")
         # ponytail: forced to CPU, torch's MPS scaled_dot_product_attention doesn't support
@@ -471,12 +472,24 @@ def send_telegram(text):
     print("telegram report sent" if r.ok else f"telegram send failed: {r.status_code} {r.text}")
 
 
+def drain_events():
+    events = EVENTS_FILE.read_text().splitlines() if EVENTS_FILE.exists() else []
+    EVENTS_FILE.unlink(missing_ok=True)
+    return events
+
+
 def report():
     """Send equity vs yesterday, today's trades with their Kronos readings, and holdings to Telegram."""
     client = get_trading_client()
-    events = EVENTS_FILE.read_text().splitlines() if EVENTS_FILE.exists() else []
-    send_telegram(build_report(client.get_account(), client.get_all_positions(), events, bench=get_benchmark()))
-    EVENTS_FILE.unlink(missing_ok=True)
+    send_telegram(build_report(client.get_account(), client.get_all_positions(), drain_events(), bench=get_benchmark()))
+
+
+def stoploss_alert():
+    """One stop-loss pass for frequent scheduled runs: message Telegram right away if anything was sold
+    (a separate job's notes never reach the daily report, so it has to speak for itself)."""
+    check_stop_losses()
+    if events := drain_events():
+        send_telegram("Stop-loss triggered\n" + "\n".join(f"- {e}" for e in events))
 
 
 def dashboard_state():
@@ -559,7 +572,7 @@ def web(port=8000):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["signal", "backtest", "trade", "recommend", "rebalance", "auto", "watch", "report", "web"])
+    parser.add_argument("mode", choices=["signal", "backtest", "trade", "recommend", "rebalance", "auto", "watch", "stoploss", "report", "web"])
     parser.add_argument("tickers", nargs="*", help="e.g. AAPL BHP.AX BBCA.JK (default: all configured markets)")
     parser.add_argument("--qty", type=int, default=1, help="shares per order in trade mode")
     parser.add_argument("--top-n", type=int, help="recommend: how many BUY/SELL picks to show (default 10); auto: how many to buy (default 5)")
@@ -574,6 +587,8 @@ if __name__ == "__main__":
 
     if args.mode == "watch":
         watch_stop_losses(interval=args.interval)
+    elif args.mode == "stoploss":
+        stoploss_alert()
     elif args.mode == "report":
         report()
     elif args.mode == "web":
