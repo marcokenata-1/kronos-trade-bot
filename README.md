@@ -5,7 +5,7 @@ Trades on an [Alpaca](https://alpaca.markets) **paper** account using price fore
 Runs daily on GitHub Actions, messages you a summary on Telegram, and has a local web dashboard
 where you can watch trades, close positions and pause new buys.
 
-![The Kronos dashboard: your trades vs buy-and-hold, equity, and open positions](docs/dashboard.png)
+![The Helm dashboard: your trades vs buy-and-hold, equity, and open positions](docs/dashboard.png)
 
 ## How it decides
 
@@ -108,7 +108,7 @@ uses about a minute of your monthly allowance, so change the `cron` line if that
 Sent by `python bot.py report` after the daily run:
 
 ```
-Kronos daily report
+Helm daily report
 Equity: $10,250.00  (yesterday $10,000.00, +250.00 / +2.50%)
 
 Today's moves:
@@ -130,29 +130,33 @@ If the variables aren't set, `report` just prints the message.
 
 ## Local dashboard
 
-```bash
-python bot.py web        # then open http://localhost:8000
-```
-
 It leads with one question: **is the bot beating buy-and-hold?** Below that: equity, cash and how much is actually
 invested, every open position with its return, and the 50 most recent orders. It refreshes every 30 seconds and
 follows your macOS light/dark setting.
 
-**Want it in the Dock like an app?** In Safari, File > Add to Dock. It opens in its own window with its own icon, no
-extra software needed.
-
-**Start it once and forget it (macOS):**
+**Open it like an app (macOS):**
 
 ```bash
-./install_dashboard.sh              # starts at login, restarts if it crashes
-./install_dashboard.sh --uninstall  # remove it
-launchctl kickstart -k gui/$(id -u)/com.kronos.dashboard   # force a restart (rarely needed)
+./install_dashboard.sh              # once: builds ~/Applications/Helm.app (drag it to your Dock if you like)
+./install_dashboard.sh --uninstall  # removes it
 ```
 
-Edits to `dashboard.html` show up on the next page refresh, and the server restarts itself within a second of `bot.py` being saved, so you never restart it by hand. Logs go to `dashboard.log`.
+Opening **Helm** starts the server and opens the page in your default browser. Close the page and the server shuts
+itself down a few seconds later, so nothing keeps running or listening. Opening the app again just restarts it
+(a couple of seconds). If a page is left open but suspended, the server also exits after 5 minutes of silence and
+the page tells you to open Helm again.
 
-It listens on `127.0.0.1` only, has no login, and refuses requests with a foreign `Host` header or
-without its `X-Requested-With` header, so other web pages can't drive it. Don't expose it beyond localhost.
+Not on macOS, or prefer a terminal? `python bot.py web` (then open http://localhost:8000) runs it until you stop it;
+add `--exit-when-closed` for the close-to-stop behaviour. Safari's File > Add to Dock also works, but only while the
+server is already running, since a Dock web app can't start it.
+
+The server is light: about 100 MB of RAM, no CPU while idle, and it never loads the Kronos model.
+Edits to `dashboard.html` show up on the next refresh, and it restarts itself within a second of `bot.py` being saved.
+Errors and startup output go to `dashboard.log`. Two open tabs share one server, so closing either stops it.
+
+It listens on `127.0.0.1` only, has no login, and refuses requests with a foreign `Host` header, and POSTs that
+don't come from its own page (custom header, or a same-origin `Origin`), so other web pages can't drive it or shut
+it down. Don't expose it beyond localhost.
 
 GitHub Pages isn't an option for this: it's static, so it can't hold your API keys or place orders.
 
@@ -201,7 +205,7 @@ for t in test_*.py; do python $t; done
 - A 5% stop is tight for crypto, where a 5% daily move is normal. Expect some sells that would have recovered, and a rebuy the next day if the signal is still BUY.
 - **The daily run is slow, because forecasting is CPU-bound.** Measured on an 8-thread Mac: about 4.2s per ticker at
   `SAMPLE_COUNT = 5`, so roughly 570 forecasts (503 stocks, 36 crypto pairs, plus held positions) is around 40 minutes,
-  and a GitHub runner has fewer cores. Batching tickers through Kronos's `predict_batch` gave no speedup on CPU
+  and a GitHub runner has fewer cores: the full-universe daily runs there have taken 1h38m to 2h04m. Batching tickers through Kronos's `predict_batch` gave no speedup on CPU
   (4.2s vs 4.4-4.6s per ticker). What does help: `SAMPLE_COUNT = 2` (1.8s per ticker, but noisier forecasts),
   a smaller universe (`--limit`, though the S&P list is alphabetical, so it favours A-names), or a faster machine.
   On a private repo, a long daily run can also use up the free Actions minutes.

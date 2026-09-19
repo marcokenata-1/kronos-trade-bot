@@ -40,13 +40,20 @@ def check_server():
         assert state["orders"][0]["side"] == "buy" and state["orders"][0]["status"] == "filled", state
         assert state["cash"] == 900, state
         assert requests.get(url + "/api/benchmark").json() == {"benchmark": {"sleeves": {}, "since": None}}
-        assert "<title>Kronos trades" in requests.get(url + "/").text
+        assert "<title>Helm" in requests.get(url + "/").text
 
         assert requests.get(url + "/api/state", headers={"Host": "evil.example"}).status_code == 403
         assert requests.post(url + "/api/close/AAPL").status_code == 403, "POST without the custom header must be refused"
         assert closed == []
         assert requests.post(url + "/api/close/AAPL", headers=ok).status_code == 200
         assert closed == ["AAPL"], closed
+        # the page's goodbye beacon can't set headers, so it is allowed by same-origin Origin instead
+        assert requests.post(url + "/api/bye", headers={"Origin": "http://evil.example"}).status_code == 403
+        assert bot.Dashboard.bye_at is None
+        assert requests.post(url + "/api/bye", headers={"Origin": f"http://127.0.0.1:{server.server_port}"}).status_code == 200
+        assert bot.Dashboard.bye_at is not None
+        requests.get(url + "/api/state")
+        assert bot.Dashboard.bye_at is None, "any later request must cancel the goodbye"
         assert requests.post(url + "/api/pause", headers=ok, json={"paused": True}).status_code == 200
         assert paused_calls == [True], paused_calls
     server.shutdown()

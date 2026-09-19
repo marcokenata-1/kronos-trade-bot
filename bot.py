@@ -437,7 +437,7 @@ def build_report(account, positions, events, bench=None, top_holdings=10):
     equity, last = float(account.equity), float(account.last_equity)
     diff = equity - last
     lines = [
-        "Kronos daily report",
+        "Helm daily report",
         f"Equity: ${equity:,.2f}  (yesterday ${last:,.2f}, {diff:+,.2f} / {diff / last:+.2%})",
         "",
         "Today's moves:",
@@ -519,7 +519,14 @@ def dashboard_state():
     }
 
 
+BYE_GRACE = 8    # seconds the server waits after the page says goodbye (a reload sends a request straight after)
+IDLE_EXIT = 300  # ...or exits after this long with no requests at all, in case the goodbye never arrives
+
+
 class Dashboard(BaseHTTPRequestHandler):
+    last_seen = time.time()
+    bye_at = None
+
     def _reply(self, code, body, ctype="application/json"):
         data = body.encode() if isinstance(body, str) else json.dumps(body, default=str).encode()
         self.send_response(code)
@@ -528,13 +535,16 @@ class Dashboard(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _guard(self):
-        """Localhost-only Host header (blocks DNS rebinding); POSTs also need a custom header,
-        which a cross-origin web page can't send without a CORS preflight we never answer."""
-        if self.headers.get("Host", "").split(":")[0] not in ("127.0.0.1", "localhost"):
+        """Localhost-only Host header (blocks DNS rebinding). POSTs must carry our custom header (a cross-origin
+        page can't send it without a CORS preflight we never answer) or, for the page's goodbye beacon which can't
+        set headers, a same-origin Origin (browsers don't let other sites forge it)."""
+        host = self.headers.get("Host", "")
+        if host.split(":")[0] not in ("127.0.0.1", "localhost"):
             self._reply(403, {"error": "bad host"})
-        elif self.command == "POST" and self.headers.get("X-Requested-With") != "dashboard":
-            self._reply(403, {"error": "missing X-Requested-With"})
+        elif self.command == "POST" and self.headers.get("X-Requested-With") != "dashboard" and self.headers.get("Origin") != f"http://{host}":
+            self._reply(403, {"error": "cross-site request refused"})
         else:
+            Dashboard.last_seen, Dashboard.bye_at = time.time(), None  # any request cancels a pending goodbye
             return True
 
     def do_GET(self):
@@ -552,7 +562,10 @@ class Dashboard(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._guard():
             return
-        if self.path == "/api/pause":
+        if self.path == "/api/bye":
+            Dashboard.bye_at = time.time() + BYE_GRACE
+            self._reply(200, {"ok": True})
+        elif self.path == "/api/pause":
             paused = bool(json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0) or "{}").get("paused"))
             self._api(lambda: set_paused(paused))
         elif self.path.startswith("/api/close/"):
@@ -582,10 +595,23 @@ def _restart_when_changed(path, interval=1.0):
             os.execv(sys.executable, [sys.executable, *sys.argv])
 
 
-def web(port=8000):
+def _exit_when_closed():
+    """Exit once the page has said goodbye (and not come back), or has been silent for IDLE_EXIT seconds."""
+    while True:
+        time.sleep(1)
+        now = time.time()
+        if (Dashboard.bye_at and now > Dashboard.bye_at) or now - Dashboard.last_seen > IDLE_EXIT:
+            print("dashboard closed, shutting down", flush=True)
+            os._exit(0)
+
+
+def web(port=8000, exit_when_closed=False):
     # ponytail: 127.0.0.1 only and no login — fine for a single-user machine, add auth before ever exposing it
+    # ponytail: two tabs open = closing one stops the server for both (poll interval 30s > BYE_GRACE)
     print(f"dashboard at http://localhost:{port} ({'LIVE' if is_live() else 'paper'} account)", flush=True)
     threading.Thread(target=_restart_when_changed, args=(Path(__file__),), daemon=True).start()
+    if exit_when_closed:
+        threading.Thread(target=_exit_when_closed, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), Dashboard).serve_forever()
 
 
@@ -601,6 +627,7 @@ if __name__ == "__main__":
     parser.add_argument("--budget", type=float, help="auto mode: stop buying once this many dollars are held across all positions (default: no cap)")
     parser.add_argument("--crypto", action="store_true", help="auto/recommend: scan the full tradable crypto marketplace instead of S&P 500 stocks")
     parser.add_argument("--port", type=int, default=8000, help="web mode: port for the local dashboard (default 8000)")
+    parser.add_argument("--exit-when-closed", action="store_true", help="web mode: shut the server down when the page is closed (what Helm.app uses)")
     parser.add_argument("--interval", type=int, default=60, help="watch mode: seconds between stop-loss checks (default 60)")
     args = parser.parse_args()
 
@@ -611,7 +638,7 @@ if __name__ == "__main__":
     elif args.mode == "report":
         report()
     elif args.mode == "web":
-        web(port=args.port)
+        web(port=args.port, exit_when_closed=args.exit_when_closed)
     elif args.mode == "recommend":
         tickers = args.tickers or (crypto_tickers() if args.crypto else sp500_tickers())[: args.limit]
         recommend(tickers, top_n=args.top_n or 10)

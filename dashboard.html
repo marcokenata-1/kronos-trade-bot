@@ -3,9 +3,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<meta name="application-name" content="Kronos">
-<title>Kronos trades</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2064%2064%22%3E%3Crect%20width=%2264%22%20height=%2264%22%20rx=%2214%22%20fill=%22%232a78d6%22/%3E%3Cpath%20d=%22M22%2015v34M45%2015L27%2032l18%2017%22%20fill=%22none%22%20stroke=%22%23fff%22%20stroke-width=%226%22%20stroke-linecap=%22round%22%20stroke-linejoin=%22round%22/%3E%3C/svg%3E">
+<meta name="application-name" content="Helm">
+<title>Helm</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2064%2064%22%3E%3Crect%20width=%2264%22%20height=%2264%22%20rx=%2214%22%20fill=%22%232a78d6%22/%3E%3Cpath%20d=%22M22%2015v34M42%2015v34M22%2032h20%22%20fill=%22none%22%20stroke=%22%23fff%22%20stroke-width=%226%22%20stroke-linecap=%22round%22%20stroke-linejoin=%22round%22/%3E%3C/svg%3E">
 <style>
   :root {
     color-scheme: light dark;
@@ -100,7 +100,7 @@
 </style>
 
 <header>
-  <span class="brand"><img src="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2064%2064%22%3E%3Crect%20width=%2264%22%20height=%2264%22%20rx=%2214%22%20fill=%22%232a78d6%22/%3E%3Cpath%20d=%22M22%2015v34M45%2015L27%2032l18%2017%22%20fill=%22none%22%20stroke=%22%23fff%22%20stroke-width=%226%22%20stroke-linecap=%22round%22%20stroke-linejoin=%22round%22/%3E%3C/svg%3E" alt="">Kronos</span>
+  <span class="brand"><img src="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2064%2064%22%3E%3Crect%20width=%2264%22%20height=%2264%22%20rx=%2214%22%20fill=%22%232a78d6%22/%3E%3Cpath%20d=%22M22%2015v34M42%2015v34M22%2032h20%22%20fill=%22none%22%20stroke=%22%23fff%22%20stroke-width=%226%22%20stroke-linecap=%22round%22%20stroke-linejoin=%22round%22/%3E%3C/svg%3E" alt="">Helm</span>
   <span class="status" id="status">Loading…</span>
   <button id="pause" hidden></button>
 </header>
@@ -265,7 +265,8 @@ async function refresh() {
     state = await api("/api/state");
     renderState(state);
   } catch (e) {
-    $("status").textContent = "Could not load: " + e.message;
+    // a network error (not an HTTP one) means the server has stopped, e.g. after an idle timeout
+    $("status").textContent = e instanceof TypeError ? "Dashboard stopped. Open Helm again to restart it." : "Could not load: " + e.message;
   }
 }
 async function refreshBenchmark() {
@@ -275,6 +276,8 @@ async function refreshBenchmark() {
 $("more").onclick = () => { showAll = true; renderOrders(state.orders); };
 $("pause").onclick = () => act(() => api("/api/pause", { paused: !state.paused }),
   state.paused ? "Resume buying? This commits and pushes the change." : "Pause new buys? This commits and pushes the change.");
+
+addEventListener("pagehide", () => navigator.sendBeacon("/api/bye"));  // lets the server shut itself down
 
 refresh(); refreshBenchmark();
 setInterval(refresh, 30000);
