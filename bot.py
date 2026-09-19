@@ -5,6 +5,7 @@ import json
 import time
 import argparse
 import subprocess
+import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -127,9 +128,12 @@ def position_ticker(position):
     return position.symbol[:-3] + "-USD" if position.asset_class == AssetClass.CRYPTO else position.symbol
 
 
-def check_signal_exits():
-    """Sell any held position whose freshly re-checked forecast has flipped to SELL."""
+def check_signal_exits(crypto):
+    """Sell any held crypto (or, with crypto=False, stock) position whose freshly re-checked forecast has flipped
+    to SELL. Each daily run only re-forecasts its own asset class, so no position is forecast twice."""
     for position in get_trading_client().get_all_positions():
+        if (position.asset_class == AssetClass.CRYPTO) != crypto:
+            continue
         ticker = position_ticker(position)
         try:
             direction, change = signal(ticker)
@@ -340,12 +344,12 @@ def recommend(tickers, top_n=10):
         print(f"  {ticker}: {change:+.2%}")
 
 
-def auto_trade(tickers, top_n=5, notional=2.0, budget=None):
+def auto_trade(tickers, top_n=5, notional=2.0, budget=None, crypto=False):
     """Exit losers (stop-loss + signal flip), then, unless the drawdown circuit breaker
     or the pause flag is on, scan `tickers` and buy $notional of the top_n BUY signals
     you don't already hold. `budget` caps total dollars held across all positions."""
     check_stop_losses()
-    check_signal_exits()
+    check_signal_exits(crypto)
 
     if check_drawdown_halt():
         return
@@ -358,8 +362,8 @@ def auto_trade(tickers, top_n=5, notional=2.0, budget=None):
     held = {position_ticker(p) for p in positions}
     invested = sum(float(p.market_value) for p in positions)
 
-    results = scan(tickers)
-    buys = sorted((r for r in results if r[1] == "BUY" and r[0] not in held), key=lambda r: r[2], reverse=True)[:top_n]
+    results = scan([t for t in tickers if t not in held])  # held ones were just re-forecast by the exit check
+    buys = sorted((r for r in results if r[1] == "BUY"), key=lambda r: r[2], reverse=True)[:top_n]
 
     if not buys:
         note(f"no new BUY signals in {len(results)} scanned tickers ({len(held)} already held), nothing bought")
@@ -564,9 +568,24 @@ class Dashboard(BaseHTTPRequestHandler):
             self._reply(500, {"error": getattr(e, "stderr", None) or str(e)})
 
 
+def _restart_when_changed(path, interval=1.0):
+    """Re-exec this process when `path` changes, so edits to bot.py show up without restarting the dashboard by hand."""
+    last = path.stat().st_mtime
+    while True:
+        time.sleep(interval)
+        try:
+            changed = path.stat().st_mtime != last
+        except FileNotFoundError:  # editor mid-save
+            continue
+        if changed:
+            print(f"{path.name} changed, restarting dashboard", flush=True)
+            os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
 def web(port=8000):
     # ponytail: 127.0.0.1 only and no login — fine for a single-user machine, add auth before ever exposing it
-    print(f"dashboard at http://localhost:{port} ({'LIVE' if is_live() else 'paper'} account)")
+    print(f"dashboard at http://localhost:{port} ({'LIVE' if is_live() else 'paper'} account)", flush=True)
+    threading.Thread(target=_restart_when_changed, args=(Path(__file__),), daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", port), Dashboard).serve_forever()
 
 
@@ -600,7 +619,7 @@ if __name__ == "__main__":
         rebalance(pool=args.tickers or None, split=args.split)
     elif args.mode == "auto":
         tickers = args.tickers or (crypto_tickers() if args.crypto else sp500_tickers())[: args.limit]
-        auto_trade(tickers, top_n=args.top_n or 5, notional=args.notional, budget=args.budget)
+        auto_trade(tickers, top_n=args.top_n or 5, notional=args.notional, budget=args.budget, crypto=args.crypto)
     else:
         tickers = args.tickers or [t for ts in MARKETS.values() for t in ts]
 

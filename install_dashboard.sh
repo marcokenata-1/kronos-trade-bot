@@ -23,4 +23,4 @@ cat > "$PLIST" <<PLIST
 </dict></plist>
 PLIST
 
-launchctl bootstrap "$DOMAIN" "$PLIST" && echo "dashboard running at http://localhost:8000 (restart after editing bot.py: launchctl kickstart -k $DOMAIN/com.kronos.dashboard)"
+launchctl bootstrap "$DOMAIN" "$PLIST" && echo "dashboard running at http://localhost:8000 (it restarts itself when bot.py changes)"

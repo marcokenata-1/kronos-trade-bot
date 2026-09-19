@@ -21,10 +21,10 @@ The bot never shorts. SELL only closes a position you already hold.
 ## The daily run (`python bot.py auto`)
 
 1. **Stop-loss:** close any position down 5% or more from entry (`STOP_LOSS_PCT`). This also runs on its own every 30 minutes, see [Stop-loss workflow](#stop-loss-workflow).
-2. **Signal exit:** re-forecast every held position and close any that flipped to SELL.
+2. **Signal exit:** re-forecast the held positions of this run's asset class (stocks for `auto`, crypto for `auto --crypto`) and close any that flipped to SELL.
 3. **Drawdown halt:** if equity is more than 25% below `baseline.json`, skip new buys.
 4. **Pause:** if the `PAUSED` file exists, skip new buys (see [Human override](#human-override)).
-5. **Scan and buy:** forecast the whole universe and buy `--notional` dollars of each of the top `--top-n` BUY signals
+5. **Scan and buy:** forecast the universe (minus what you already hold) and buy `--notional` dollars of each of the top `--top-n` BUY signals
    **you don't already hold**. With `--budget N`, it stops buying once N dollars are held across all positions.
 
 The universe is the S&P 500 (`auto`) or every tradable Alpaca `/USD` crypto pair (`auto --crypto`).
@@ -146,10 +146,10 @@ extra software needed.
 ```bash
 ./install_dashboard.sh              # starts at login, restarts if it crashes
 ./install_dashboard.sh --uninstall  # remove it
-launchctl kickstart -k gui/$(id -u)/com.kronos.dashboard   # restart after editing bot.py
+launchctl kickstart -k gui/$(id -u)/com.kronos.dashboard   # force a restart (rarely needed)
 ```
 
-Edits to `dashboard.html` show up on the next page refresh with no restart. Logs go to `dashboard.log`.
+Edits to `dashboard.html` show up on the next page refresh, and the server restarts itself within a second of `bot.py` being saved, so you never restart it by hand. Logs go to `dashboard.log`.
 
 It listens on `127.0.0.1` only, has no login, and refuses requests with a foreign `Host` header or
 without its `X-Requested-With` header, so other web pages can't drive it. Don't expose it beyond localhost.
@@ -199,7 +199,12 @@ for t in test_*.py; do python $t; done
 
 - Stop-loss runs about every 30 minutes, not instantly: GitHub can delay scheduled runs, and a stock sold while the market is closed waits for the open. It's a check on current P/L, not an order sitting at Alpaca. Alpaca doesn't take stop orders on dollar-amount (fractional) buys, which is what this bot places.
 - A 5% stop is tight for crypto, where a 5% daily move is normal. Expect some sells that would have recovered, and a rebuy the next day if the signal is still BUY.
-- The daily run scans ~500 stocks on a CPU runner, which is slow.
+- **The daily run is slow, because forecasting is CPU-bound.** Measured on an 8-thread Mac: about 4.2s per ticker at
+  `SAMPLE_COUNT = 5`, so roughly 570 forecasts (503 stocks, 36 crypto pairs, plus held positions) is around 40 minutes,
+  and a GitHub runner has fewer cores. Batching tickers through Kronos's `predict_batch` gave no speedup on CPU
+  (4.2s vs 4.4-4.6s per ticker). What does help: `SAMPLE_COUNT = 2` (1.8s per ticker, but noisier forecasts),
+  a smaller universe (`--limit`, though the S&P list is alphabetical, so it favours A-names), or a faster machine.
+  On a private repo, a long daily run can also use up the free Actions minutes.
 - Yahoo Finance prices are used for signals, Alpaca fills may differ.
 - Everything is a market order.
 - Nothing here is financial advice, and paper results don't predict live results.
